@@ -11,8 +11,8 @@ spec:
       - k8s-agent-sandbox==1.0.0
     working_dir: "https://github.com/vicentefb/kuberay/archive/refs/heads/snapshotStress.zip"
     env_vars:
-      NUM_EXECUTORS: "20"
-      CYCLES: "5"
+      NUM_EXECUTORS: "100"
+      CYCLES: "10"
       STATE_MB: "64"
       MODEL_LATENCY: "5"
   rayClusterSpec:
@@ -40,9 +40,9 @@ spec:
                 memory: "4Gi"
     workerGroupSpecs:
     - groupName: sandbox-executor-workers
-      replicas: 2
+      replicas: 5
       minReplicas: 1
-      maxReplicas: 2
+      maxReplicas: 5
       rayStartParams: {}
       template:
         spec:
@@ -52,7 +52,7 @@ spec:
             resources:
               requests:
                 cpu: "1"
-                memory: "2Gi"
+                memory: "4Gi"
               limits:
                 cpu: "1"
-                memory: "2Gi"
+                memory: "4Gi"

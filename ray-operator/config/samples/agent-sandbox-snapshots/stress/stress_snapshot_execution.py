@@ -48,7 +48,7 @@ VERIFY_STATE = (
 )
 
 
-@ray.remote(num_cpus=0)
+@ray.remote(num_cpus=0, memory=150 * 1024 * 1024)
 class StressExecutor:
     def __init__(self, worker_id: int):
         from k8s_agent_sandbox.gke_extensions.snapshots import PodSnapshotSandboxClient
