@@ -24,6 +24,9 @@ CYCLES = int(os.environ.get("CYCLES", "5"))
 STATE_MB = int(os.environ.get("STATE_MB", "64"))
 MODEL_LATENCY = float(os.environ.get("MODEL_LATENCY", "5"))
 WARMPOOL = os.environ.get("WARMPOOL", "python-snapshot-pool")
+# Deep-queue budgets for high-concurrency rungs.
+SNAPSHOT_READY_RETRIES = int(os.environ.get("SNAPSHOT_READY_RETRIES", "150"))
+RESUME_WAIT = int(os.environ.get("RESUME_WAIT", "300"))
 
 # Writes STATE_MB of random data to tmpfs (counts as guest memory, defeats
 # compression) and records a sampled digest for post-restore verification.
@@ -48,7 +51,7 @@ VERIFY_STATE = (
 )
 
 
-@ray.remote(num_cpus=0, memory=150 * 1024 * 1024)
+@ray.remote(num_cpus=0)
 class StressExecutor:
     def __init__(self, worker_id: int):
         from k8s_agent_sandbox.gke_extensions.snapshots import PodSnapshotSandboxClient
@@ -85,7 +88,7 @@ class StressExecutor:
             uid = res.snapshot_response.snapshot_uid
             # Poll until the snapshot is Ready (upload complete); generous
             # budget because large working sets upload slowly.
-            for _ in range(150):
+            for _ in range(SNAPSHOT_READY_RETRIES):
                 listed = self.sandbox.snapshots.list()
                 if listed.success and any(s.snapshot_uid == uid for s in listed.snapshots):
                     return {"ok": True, "seconds": time.time() - t0, "uid": uid}
@@ -97,20 +100,21 @@ class StressExecutor:
     def resume_and_verify(self) -> dict:
         t0 = time.time()
         try:
-            res = self.sandbox.resume(wait_timeout=300)
+            res = self.sandbox.resume(wait_timeout=RESUME_WAIT)
             seconds = time.time() - t0
             if not res.success:
+                # The SDK reports a fresh-instance via success=False. Its
+                # PodRestored check runs once, right after Ready, and can
+                # race the condition write — adjudicate by checking whether
+                # the state actually survived before calling it a loss.
+                if "not restored from snapshot" in (res.error_reason or ""):
+                    time.sleep(5)
+                    check = self.sandbox.commands.run("python verify_state.py", timeout=120)
+                    if check.exit_code == 0 and check.stdout.strip() == self.state_digest:
+                        return {"ok": True, "seconds": seconds,
+                                "note": "SDK false alarm: state intact, PodRestored condition lagged"}
+                    return {"ok": False, "seconds": seconds, "error": "cold-started, state LOST"}
                 return {"ok": False, "seconds": seconds, "error": res.error_reason}
-            if not res.restored_from_snapshot:
-                # The SDK reads the PodRestored condition once, right after
-                # Ready — it can race the condition write. Adjudicate by
-                # checking whether the state actually survived.
-                time.sleep(5)
-                check = self.sandbox.commands.run("python verify_state.py", timeout=120)
-                if check.exit_code == 0 and check.stdout.strip() == self.state_digest:
-                    return {"ok": True, "seconds": seconds,
-                            "note": "SDK false alarm: state intact, PodRestored condition lagged"}
-                return {"ok": False, "seconds": seconds, "error": "cold-started, state LOST"}
             check = self.sandbox.commands.run("python verify_state.py", timeout=120)
             if check.exit_code != 0:
                 return {"ok": False, "seconds": seconds, "error": f"verify exec: {check.stderr}"}
