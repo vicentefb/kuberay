@@ -88,6 +88,16 @@ class RolloutActor:
             time.sleep(2)
         raise RuntimeError("snapshot never Ready")
 
+    def _retry(self, fn, tries=4, delay=3):
+        last = None
+        for _ in range(tries):
+            try:
+                return fn()
+            except Exception as e:
+                last = e
+                time.sleep(delay)
+        raise last
+
     def _infer(self, tail: str) -> tuple[str, float]:
         t0 = time.time()
         resp = self.llm.models.generate_content(
@@ -121,18 +131,28 @@ class RolloutActor:
                     res = self.sandbox.resume(wait_timeout=RESUME_WAIT)
                     resume_s = time.time() - t0
                     if not res.success:
-                        raise RuntimeError(f"resume: {res.error_reason}")
+                        if "not restored from snapshot" in (res.error_reason or ""):
+                            time.sleep(3)
+                            probe = self._retry(lambda: self.sandbox.commands.run(
+                                "python -c \"print(sum(1 for _ in open('/tmp/transcript.txt')))\"",
+                                timeout=15))
+                            if probe.exit_code != 0:
+                                raise RuntimeError("cold start CONFIRMED: transcript gone")
+                            # false alarm: state intact — continue the turn
+                        else:
+                            raise RuntimeError(f"resume: {res.error_reason}")
 
-                    self.sandbox.files.write(f"turn_{turn}.py", code)
+                    self._retry(lambda: self.sandbox.files.write(f"turn_{turn}.py", code))
                     t0 = time.time()
-                    r = self.sandbox.commands.run(f"python turn_{turn}.py", timeout=20)
+                    r = self._retry(lambda: self.sandbox.commands.run(f"python turn_{turn}.py", timeout=20))
                     exec_s = time.time() - t0
 
-                    chk = self.sandbox.commands.run(
-                        "python -c \"print(sum(1 for _ in open('/tmp/transcript.txt')))\"", timeout=15)
+                    chk = self._retry(lambda: self.sandbox.commands.run(
+                        "python -c \"print(sum(1 for _ in open('/tmp/transcript.txt')))\"", timeout=15))
                     lines = int(chk.stdout.strip()) if chk.exit_code == 0 else -1
                     state_ok = lines >= turn  # model snippet may or may not have appended; >= turn-1 lines must survive
-                    tail = self.sandbox.commands.run("tail -3 /tmp/transcript.txt", timeout=15).stdout
+                    tail = self._retry(lambda: self.sandbox.commands.run(
+                        "tail -3 /tmp/transcript.txt", timeout=15)).stdout
 
                     added = max(suspend_s, infer_s) + resume_s - infer_s
                     turns.append({"infer": infer_s, "suspend": suspend_s, "resume": resume_s,
