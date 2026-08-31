@@ -1,0 +1,49 @@
+# Real-model RL-shaped suspend/resume run (tier-1). Scratch, not for PR.
+apiVersion: ray.io/v1
+kind: RayJob
+metadata:
+  name: agent-sandbox-snapshot-rl
+spec:
+  entrypoint: python ray-operator/config/samples/agent-sandbox-snapshots/stress/rl_snapshot_execution.py
+  runtimeEnvYAML: |
+    pip:
+      - k8s-agent-sandbox==1.0.0
+      - google-genai
+    working_dir: "https://github.com/vicentefb/kuberay/archive/refs/heads/snapshotStress.zip"
+    env_vars:
+      NUM_EXECUTORS: "100"
+      TURNS: "5"
+      STATE_MB: "64"
+      GEMINI_MODEL: "gemini-2.5-flash"
+      VERTEX_LOCATION: "us-central1"
+      VERTEX_PROJECT: "gke-ai-eco-dev"
+  rayClusterSpec:
+    headGroupSpec:
+      rayStartParams:
+        dashboard-host: 0.0.0.0
+      template:
+        spec:
+          containers:
+          - image: rayproject/ray:2.55.0-py311
+            name: ray-head
+            ports:
+            - {containerPort: 6379, name: gcs}
+            - {containerPort: 8265, name: dashboard}
+            - {containerPort: 10001, name: client}
+            resources:
+              requests: {cpu: "4", memory: "8Gi"}
+              limits: {cpu: "4", memory: "8Gi"}
+    workerGroupSpecs:
+    - groupName: sandbox-executor-workers
+      replicas: 30
+      minReplicas: 30
+      maxReplicas: 30
+      rayStartParams: {}
+      template:
+        spec:
+          containers:
+          - image: rayproject/ray:2.55.0-py311
+            name: ray-worker
+            resources:
+              requests: {cpu: "2", memory: "8Gi"}
+              limits: {cpu: "2", memory: "8Gi"}
