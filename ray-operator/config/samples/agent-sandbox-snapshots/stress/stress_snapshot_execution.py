@@ -85,6 +85,10 @@ class StressExecutor:
             res = self.sandbox.suspend(snapshot_before_suspend=True)
             if not res.success:
                 return {"ok": False, "seconds": time.time() - t0, "error": res.error_reason}
+            if res.snapshot_response is None:
+                # SDK fast-path: sandbox was already suspended; no new snapshot.
+                return {"ok": True, "seconds": time.time() - t0, "uid": None,
+                        "note": "already suspended; no new snapshot taken"}
             uid = res.snapshot_response.snapshot_uid
             # Poll until the snapshot is Ready (upload complete); generous
             # budget because large working sets upload slowly.
