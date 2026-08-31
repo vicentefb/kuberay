@@ -196,6 +196,7 @@ def main() -> int:
                   f"(wall {time.time() - t_cycle:.0f}s)")
 
         counts = gather([e.snapshot_count.remote() for e in executors])
+        counts = [c for c in counts if isinstance(c, int)]
         print("\n=== RESULTS ===")
         print(f"suspend (snapshot Ready + pod gone): {stats(suspend_times)}")
         print(f"resume  (pod up + restore verified): {stats(resume_times)}")
